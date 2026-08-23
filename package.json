@@ -1,0 +1,16 @@
+{
+  "name": "discord-afk",
+  "version": "1.0.0",
+  "description": "",
+  "main": "manager.js",
+  "scripts": {
+    "start": "nodemon manager.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@discordjs/voice": "^0.19.2",
+    "discord.js": "^14.27.0",
+    "dotenv": "^17.4.2"
+  }
+}
