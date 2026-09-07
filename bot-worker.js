@@ -1,5 +1,3 @@
-require("dotenv").config();
-
 const {
     Client,
     GatewayIntentBits,
@@ -11,10 +9,15 @@ const {
     VoiceConnectionStatus
 } = require("@discordjs/voice");
 
-const botId = String(process.env.BOT_ID).padStart(2, "0");
-const token = process.env.BOT_TOKEN;
+const botId =
+    String(process.env.BOT_ID)
+        .padStart(2, "0");
 
-let channelId = process.env.CHANNEL_ID;
+const token =
+    process.env.BOT_TOKEN;
+
+let channelId =
+    process.env.CHANNEL_ID;
 
 let client = null;
 let connection = null;
@@ -22,15 +25,15 @@ let connection = null;
 let stopping = false;
 let reconnecting = false;
 
+/* --------------------------------
+   LOG
+-------------------------------- */
+
 function log(message) {
     console.log(
         `[${new Date().toLocaleTimeString()}] ` +
         `[BOT ${botId}] ${message}`
     );
-}
-
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /* --------------------------------
@@ -45,23 +48,43 @@ function createClient() {
         ]
     });
 
-    client.once("ready", async () => {
-        log(`ONLINE as ${client.user.tag}`);
+    client.once(
+        "ready",
+        async () => {
+            log(
+                `ONLINE as ${client.user.tag}`
+            );
 
-        await connectToRoom();
-    });
+            await connectToRoom();
+        }
+    );
 
-    client.on("error", error => {
-        log(`Discord error: ${error.message}`);
-    });
+    client.on(
+        "error",
+        error => {
+            log(
+                `Discord error: ${error.message}`
+            );
+        }
+    );
 
-    client.on("shardError", error => {
-        log(`Shard error: ${error.message}`);
-    });
+    client.on(
+        "shardError",
+        error => {
+            log(
+                `Shard error: ${error.message}`
+            );
+        }
+    );
 
-    client.on("disconnect", () => {
-        log("Discord gateway disconnected");
-    });
+    client.on(
+        "disconnect",
+        () => {
+            log(
+                "Discord gateway disconnected"
+            );
+        }
+    );
 }
 
 /* --------------------------------
@@ -69,34 +92,47 @@ function createClient() {
 -------------------------------- */
 
 async function connectToRoom() {
-    if (stopping || !client?.isReady()) {
+    if (
+        stopping ||
+        !client?.isReady()
+    ) {
         return;
     }
 
     try {
         const channel =
-            await client.channels.fetch(channelId);
+            await client.channels.fetch(
+                channelId
+            );
 
         if (!channel) {
-            log(`Room ${channelId} not found.`);
+            log(
+                `Room ${channelId} not found.`
+            );
+
             scheduleReconnect();
+
             return;
         }
 
-        if (channel.type !== ChannelType.GuildVoice) {
+        if (
+            channel.type !==
+            ChannelType.GuildVoice
+        ) {
             log(
                 `Room ${channelId} is not a voice channel.`
             );
 
             scheduleReconnect();
+
             return;
         }
 
         /*
          * This worker belongs to ONE bot.
          *
-         * There is no getVoiceConnection()
-         * and no attempt to touch another bot.
+         * It only manages its own
+         * voice connection.
          */
 
         if (connection) {
@@ -107,27 +143,42 @@ async function connectToRoom() {
             connection = null;
         }
 
-        connection = joinVoiceChannel({
-            channelId: channel.id,
-            guildId: channel.guild.id,
-            adapterCreator: channel.guild.voiceAdapterCreator,
+        connection =
+            joinVoiceChannel({
+                channelId:
+                    channel.id,
 
-            /*
-             * The bot does absolutely nothing.
-             * No audio is played.
-             * No microphone is transmitted.
-             */
+                guildId:
+                    channel.guild.id,
 
-            selfMute: true,
-            selfDeaf: true
-        });
+                adapterCreator:
+                    channel.guild
+                        .voiceAdapterCreator,
 
-        const thisConnection = connection;
+                /*
+                 * AFK bot:
+                 * no audio
+                 * no microphone
+                 */
+
+                selfMute: true,
+                selfDeaf: true
+            });
+
+        const thisConnection =
+            connection;
+
+        /* --------------------------------
+           VOICE READY
+        -------------------------------- */
 
         connection.on(
             VoiceConnectionStatus.Ready,
             () => {
-                if (connection !== thisConnection) {
+                if (
+                    connection !==
+                    thisConnection
+                ) {
                     return;
                 }
 
@@ -135,14 +186,23 @@ async function connectToRoom() {
                     `CONNECTED → ${channel.name}`
                 );
 
-                sendStatus("connected");
+                sendStatus(
+                    "connected"
+                );
             }
         );
+
+        /* --------------------------------
+           VOICE DISCONNECTED
+        -------------------------------- */
 
         connection.on(
             VoiceConnectionStatus.Disconnected,
             async () => {
-                if (connection !== thisConnection) {
+                if (
+                    connection !==
+                    thisConnection
+                ) {
                     return;
                 }
 
@@ -150,22 +210,28 @@ async function connectToRoom() {
                     "VOICE DISCONNECTED → reconnecting"
                 );
 
-                sendStatus("disconnected");
-
-                /*
-                 * Don't wait 5 or 10 seconds.
-                 * Try again almost immediately.
-                 */
+                sendStatus(
+                    "disconnected"
+                );
 
                 await reconnect();
             }
         );
 
+        /* --------------------------------
+           VOICE DESTROYED
+        -------------------------------- */
+
         connection.on(
             VoiceConnectionStatus.Destroyed,
             () => {
-                if (connection === thisConnection) {
-                    log("VOICE CONNECTION DESTROYED");
+                if (
+                    connection ===
+                    thisConnection
+                ) {
+                    log(
+                        "VOICE CONNECTION DESTROYED"
+                    );
                 }
             }
         );
@@ -175,7 +241,9 @@ async function connectToRoom() {
             `Voice connection error: ${error.message}`
         );
 
-        sendStatus("error");
+        sendStatus(
+            "error"
+        );
 
         scheduleReconnect();
     }
@@ -213,6 +281,10 @@ async function reconnect() {
     }
 }
 
+/* --------------------------------
+   SCHEDULE RECONNECT
+-------------------------------- */
+
 function scheduleReconnect() {
     if (
         stopping ||
@@ -221,22 +293,35 @@ function scheduleReconnect() {
         return;
     }
 
-    setTimeout(() => {
-        reconnect();
-    }, 100);
+    setTimeout(
+        () => {
+            reconnect();
+        },
+        100
+    );
 }
 
 /* --------------------------------
    CHANGE ROOM
 -------------------------------- */
 
-async function changeRoom(newChannelId) {
-    if (!/^\d+$/.test(String(newChannelId))) {
-        log("Invalid room ID.");
+async function changeRoom(
+    newChannelId
+) {
+    if (
+        !/^\d+$/.test(
+            String(newChannelId)
+        )
+    ) {
+        log(
+            "Invalid room ID."
+        );
+
         return;
     }
 
-    channelId = String(newChannelId);
+    channelId =
+        String(newChannelId);
 
     log(
         `Changing room → ${channelId}`
@@ -246,7 +331,7 @@ async function changeRoom(newChannelId) {
 }
 
 /* --------------------------------
-   IPC
+   IPC STATUS
 -------------------------------- */
 
 function sendStatus(status) {
@@ -260,29 +345,61 @@ function sendStatus(status) {
     }
 }
 
+/* --------------------------------
+   IPC COMMANDS
+-------------------------------- */
+
 process.on(
     "message",
     async message => {
-        if (!message || !message.type) {
+        if (
+            !message ||
+            !message.type
+        ) {
             return;
         }
 
-        if (message.type === "change") {
+        /* --------------------------------
+           CHANGE
+        -------------------------------- */
+
+        if (
+            message.type ===
+            "change"
+        ) {
             await changeRoom(
                 message.channelId
             );
         }
 
-        if (message.type === "restart") {
-            log("Restart requested.");
+        /* --------------------------------
+           RESTART
+        -------------------------------- */
+
+        if (
+            message.type ===
+            "restart"
+        ) {
+            log(
+                "Restart requested."
+            );
 
             await reconnect();
         }
 
-        if (message.type === "stop") {
+        /* --------------------------------
+           STOP
+        -------------------------------- */
+
+        if (
+            message.type ===
+            "stop"
+        ) {
             stopping = true;
 
-            log("Stopping bot...");
+            log(
+                "Stopping bot..."
+            );
 
             try {
                 if (connection) {
@@ -290,7 +407,9 @@ process.on(
                     connection = null;
                 }
             } catch (error) {
-                log(`Voice disconnect error: ${error.message}`);
+                log(
+                    `Voice disconnect error: ${error.message}`
+                );
             }
 
             try {
@@ -299,13 +418,22 @@ process.on(
                     client = null;
                 }
             } catch (error) {
-                log(`Discord disconnect error: ${error.message}`);
+                log(
+                    `Discord disconnect error: ${error.message}`
+                );
             }
 
-            // Give Discord/voice adapter a moment to process the disconnect
-            setTimeout(() => {
-                process.exit(0);
-            }, 250);
+            /*
+             * Give Discord/voice adapter
+             * a moment to process shutdown.
+             */
+
+            setTimeout(
+                () => {
+                    process.exit(0);
+                },
+                250
+            );
 
             return;
         }
@@ -319,14 +447,16 @@ process.on(
 async function start() {
     if (!token) {
         log(
-            `TOKEN NOT FOUND: BOT_${botId}_TOKEN`
+            "TOKEN NOT FOUND IN BOTS.JSON."
         );
 
         process.exit(1);
     }
 
     if (!channelId) {
-        log("CHANNEL ID NOT PROVIDED.");
+        log(
+            "CHANNEL ID NOT PROVIDED."
+        );
 
         process.exit(1);
     }
@@ -334,20 +464,28 @@ async function start() {
     createClient();
 
     try {
-        await client.login(token);
+        await client.login(
+            token
+        );
+
     } catch (error) {
         log(
             `LOGIN FAILED: ${error.message}`
         );
 
         /*
-         * The worker stays alive and keeps
-         * attempting to reconnect.
+         * Keep the worker alive so
+         * the manager can continue
+         * managing this process.
          */
 
         scheduleReconnect();
     }
 }
+
+/* --------------------------------
+   SIGINT
+-------------------------------- */
 
 process.on(
     "SIGINT",
@@ -368,6 +506,10 @@ process.on(
     }
 );
 
+/* --------------------------------
+   SIGTERM
+-------------------------------- */
+
 process.on(
     "SIGTERM",
     () => {
@@ -386,5 +528,9 @@ process.on(
         process.exit(0);
     }
 );
+
+/* --------------------------------
+   START
+-------------------------------- */
 
 start();

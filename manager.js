@@ -1,11 +1,13 @@
-require("dotenv").config();
-
 const fs = require("fs");
 const path = require("path");
 const { fork } = require("child_process");
 const readline = require("readline");
 
-const BOTS_FILE = "./bots.json";
+const BOTS_FILE = path.join(
+    __dirname,
+    "bots.json"
+);
+
 const WORKER_FILE = path.join(
     __dirname,
     "bot-worker.js"
@@ -31,16 +33,16 @@ function loadBots() {
     if (!fs.existsSync(BOTS_FILE)) {
         fs.writeFileSync(
             BOTS_FILE,
-            "[]"
+            "[]",
+            "utf8"
         );
     }
 
     try {
-        const data =
-            fs.readFileSync(
-                BOTS_FILE,
-                "utf8"
-            );
+        const data = fs.readFileSync(
+            BOTS_FILE,
+            "utf8"
+        );
 
         const bots = JSON.parse(data);
 
@@ -51,7 +53,6 @@ function loadBots() {
         }
 
         return bots;
-
     } catch (error) {
         log(
             `ERROR reading bots.json: ${error.message}`
@@ -68,21 +69,9 @@ function saveBots(bots) {
             bots,
             null,
             2
-        )
+        ),
+        "utf8"
     );
-}
-
-/* --------------------------------
-   TOKEN
--------------------------------- */
-
-function getToken(botId) {
-    const id =
-        String(botId).padStart(2, "0");
-
-    return process.env[
-        `BOT_${id}_TOKEN`
-    ];
 }
 
 /* --------------------------------
@@ -90,12 +79,14 @@ function getToken(botId) {
 -------------------------------- */
 
 function findBot(botId) {
+    const id =
+        String(botId).padStart(2, "0");
+
     const bots = loadBots();
 
     return bots.find(
         bot =>
-            String(bot.id) ===
-            String(botId)
+            String(bot.id).padStart(2, "0") === id
     );
 }
 
@@ -105,13 +96,17 @@ function findBot(botId) {
 
 function startWorker(
     botId,
-    channelId
+    channelId,
+    token
 ) {
     botId =
         String(botId).padStart(2, "0");
 
     channelId =
         String(channelId);
+
+    token =
+        String(token || "");
 
     if (workers.has(botId)) {
         log(
@@ -121,12 +116,17 @@ function startWorker(
         return false;
     }
 
-    const token =
-        getToken(botId);
-
     if (!token) {
         log(
-            `Bot ${botId}: BOT_${botId}_TOKEN not found in .env`
+            `Bot ${botId}: token is missing in bots.json.`
+        );
+
+        return false;
+    }
+
+    if (!/^\d+$/.test(channelId)) {
+        log(
+            `Bot ${botId}: invalid room ID.`
         );
 
         return false;
@@ -142,8 +142,6 @@ function startWorker(
             [],
             {
                 env: {
-                    ...process.env,
-
                     BOT_ID: botId,
                     BOT_TOKEN: token,
                     CHANNEL_ID: channelId
@@ -167,6 +165,10 @@ function startWorker(
         }
     );
 
+    /* --------------------------------
+       WORKER → MANAGER
+    -------------------------------- */
+
     worker.on(
         "message",
         message => {
@@ -182,6 +184,10 @@ function startWorker(
         }
     );
 
+    /* --------------------------------
+       WORKER EXIT
+    -------------------------------- */
+
     worker.on(
         "exit",
         (code, signal) => {
@@ -190,9 +196,8 @@ function startWorker(
 
             /*
              * Worker was intentionally
-             * removed/restarted.
+             * stopped/restarted.
              */
-
             if (
                 !info ||
                 info.stopping
@@ -212,7 +217,6 @@ function startWorker(
              * Unexpected crash:
              * automatically start it again.
              */
-
             log(
                 `Bot ${botId}: restarting worker...`
             );
@@ -221,15 +225,24 @@ function startWorker(
                 const config =
                     findBot(botId);
 
-                if (config) {
+                if (
+                    config &&
+                    config.token &&
+                    config.channelId
+                ) {
                     startWorker(
-                        botId,
-                        config.channelId
+                        config.id,
+                        config.channelId,
+                        config.token
                     );
                 }
             }, 1000);
         }
     );
+
+    /* --------------------------------
+       WORKER ERROR
+    -------------------------------- */
 
     worker.on(
         "error",
@@ -285,13 +298,17 @@ function stopWorker(botId) {
 
 function addBot(
     botId,
-    channelId
+    channelId,
+    token
 ) {
     botId =
         String(botId).padStart(2, "0");
 
     channelId =
         String(channelId);
+
+    token =
+        String(token || "");
 
     if (!/^\d+$/.test(botId)) {
         log(
@@ -309,17 +326,17 @@ function addBot(
         return;
     }
 
-    if (findBot(botId)) {
+    if (!token) {
         log(
-            `Bot ${botId} already exists in bots.json.`
+            "Bot token is required."
         );
 
         return;
     }
 
-    if (!getToken(botId)) {
+    if (findBot(botId)) {
         log(
-            `BOT_${botId}_TOKEN is missing from .env`
+            `Bot ${botId} already exists in bots.json.`
         );
 
         return;
@@ -330,7 +347,8 @@ function addBot(
 
     bots.push({
         id: botId,
-        channelId
+        token: token,
+        channelId: channelId
     });
 
     saveBots(bots);
@@ -343,10 +361,10 @@ function addBot(
      * Start ONLY this bot.
      * Existing workers are untouched.
      */
-
     startWorker(
         botId,
-        channelId
+        channelId,
+        token
     );
 }
 
@@ -370,7 +388,7 @@ function removeBot(
     const bot =
         bots.find(
             item =>
-                String(item.id) ===
+                String(item.id).padStart(2, "0") ===
                 botId
         );
 
@@ -386,7 +404,6 @@ function removeBot(
      * If a room ID was supplied,
      * verify it matches.
      */
-
     if (
         channelId &&
         String(bot.channelId) !==
@@ -402,17 +419,15 @@ function removeBot(
     /*
      * Disconnect ONLY this bot.
      */
-
     stopWorker(botId);
 
     /*
      * Remove its configuration.
      */
-
     const newBots =
         bots.filter(
             item =>
-                String(item.id) !==
+                String(item.id).padStart(2, "0") !==
                 botId
         );
 
@@ -451,7 +466,7 @@ function changeBot(
     const bot =
         bots.find(
             item =>
-                String(item.id) ===
+                String(item.id).padStart(2, "0") ===
                 botId
         );
 
@@ -466,7 +481,6 @@ function changeBot(
     /*
      * Update bots.json FIRST.
      */
-
     bot.channelId =
         newChannelId;
 
@@ -476,7 +490,6 @@ function changeBot(
      * Tell the existing worker to
      * move to the new room.
      */
-
     const info =
         workers.get(botId);
 
@@ -485,10 +498,10 @@ function changeBot(
          * Bot isn't currently running.
          * Start it in the new room.
          */
-
         startWorker(
             botId,
-            newChannelId
+            newChannelId,
+            bot.token
         );
 
         return;
@@ -497,10 +510,18 @@ function changeBot(
     info.channelId =
         newChannelId;
 
-    info.worker.send({
-        type: "change",
-        channelId: newChannelId
-    });
+    try {
+        info.worker.send({
+            type: "change",
+            channelId: newChannelId
+        });
+    } catch (error) {
+        log(
+            `Bot ${botId}: failed to send room change: ${error.message}`
+        );
+
+        return;
+    }
 
     log(
         `Bot ${botId}: changing room → ${newChannelId}`
@@ -526,10 +547,17 @@ function restartBot(botId) {
         return;
     }
 
+    if (!bot.token) {
+        log(
+            `Bot ${botId}: token missing in bots.json.`
+        );
+
+        return;
+    }
+
     /*
      * Stop only this worker.
      */
-
     const info =
         workers.get(botId);
 
@@ -552,11 +580,11 @@ function restartBot(botId) {
     /*
      * Start the same bot again.
      */
-
     setTimeout(() => {
         startWorker(
-            botId,
-            bot.channelId
+            bot.id,
+            bot.channelId,
+            bot.token
         );
     }, 500);
 
@@ -574,6 +602,7 @@ function status() {
         loadBots();
 
     console.log("");
+
     console.log(
         "============== BOT STATUS =============="
     );
@@ -599,7 +628,12 @@ function status() {
                     ? "RUNNING"
                     : "STOPPED"
             } | ` +
-            `Room: ${bot.channelId}`
+            `Room: ${bot.channelId} | ` +
+            `Token: ${
+                bot.token
+                    ? "SET"
+                    : "MISSING"
+            }`
         );
     }
 
@@ -631,22 +665,28 @@ async function handleCommand(input) {
 
     switch (command) {
 
+        /* --------------------------------
+           ADD
+        -------------------------------- */
+
         case "add": {
             /*
-             * add <bot no> <room id>
+             * add <bot no> <room id> <token>
              */
 
             const [
                 botId,
-                channelId
+                channelId,
+                token
             ] = parts;
 
             if (
                 !botId ||
-                !channelId
+                !channelId ||
+                !token
             ) {
                 console.log(
-                    "Usage: add <bot no.> <room id>"
+                    "Usage: add <bot no.> <room id> <token>"
                 );
 
                 return;
@@ -654,11 +694,16 @@ async function handleCommand(input) {
 
             addBot(
                 botId,
-                channelId
+                channelId,
+                token
             );
 
             break;
         }
+
+        /* --------------------------------
+           REMOVE
+        -------------------------------- */
 
         case "remove": {
             /*
@@ -689,6 +734,10 @@ async function handleCommand(input) {
             break;
         }
 
+        /* --------------------------------
+           CHANGE
+        -------------------------------- */
+
         case "change": {
             /*
              * change <bot no> <new room id>
@@ -718,13 +767,18 @@ async function handleCommand(input) {
             break;
         }
 
+        /* --------------------------------
+           RESTART
+        -------------------------------- */
+
         case "restart": {
             /*
              * restart <bot no>
              */
 
-            const [botId] =
-                parts;
+            const [
+                botId
+            ] = parts;
 
             if (!botId) {
                 console.log(
@@ -739,20 +793,28 @@ async function handleCommand(input) {
             break;
         }
 
+        /* --------------------------------
+           STATUS
+        -------------------------------- */
+
         case "status": {
             status();
             break;
         }
 
+        /* --------------------------------
+           HELP
+        -------------------------------- */
+
         case "help": {
             console.log(`
 Commands:
 
-add <bot no.> <room id>
-    Add bot to bots.json and start it.
+add <bot no.> <room id> <token>
+    Add a bot to bots.json and start it.
 
 remove <bot no.> <room id>
-    Remove bot from bots.json and disconnect it.
+    Remove the bot from bots.json and disconnect it.
 
 change <bot no.> <room id>
     Change the bot's room and move it.
@@ -769,9 +831,12 @@ help
 exit
     Stop all bot workers and exit.
 `);
-
             break;
         }
+
+        /* --------------------------------
+           EXIT
+        -------------------------------- */
 
         case "exit": {
             shutdown();
@@ -797,12 +862,31 @@ function startSavedBots() {
         `Loading ${bots.length} saved bot(s)...`
     );
 
-    for (
-        const bot of bots
-    ) {
+    for (const bot of bots) {
+        const botId =
+            String(bot.id)
+                .padStart(2, "0");
+
+        if (!bot.token) {
+            log(
+                `Bot ${botId}: token missing in bots.json. Skipping.`
+            );
+
+            continue;
+        }
+
+        if (!bot.channelId) {
+            log(
+                `Bot ${botId}: channel ID missing in bots.json. Skipping.`
+            );
+
+            continue;
+        }
+
         startWorker(
-            bot.id,
-            bot.channelId
+            botId,
+            bot.channelId,
+            bot.token
         );
     }
 }
@@ -846,23 +930,29 @@ function shutdown() {
 
 function main() {
     console.log("");
+
     console.log(
         "=================================="
     );
+
     console.log(
         "       DISCORD AFK BOT MANAGER"
     );
+
     console.log(
         "=================================="
     );
+
     console.log("");
 
     startSavedBots();
 
     console.log("");
+
     console.log(
         'Type "help" for commands.'
     );
+
     console.log("");
 
     const rl =
