@@ -47,13 +47,7 @@ function validId(id) {
 ============================================ */
 
 function loadEnv() {
-    if (!fs.existsSync(ENV_FILE)) {
-        throw new Error(".env file not found.");
-    }
-
-    const parsed = dotenv.parse(
-        fs.readFileSync(ENV_FILE, "utf8")
-    );
+    const parsed = process.env;
 
     const nextConfig = {
         guildId: parsed.GUILD_ID || "",
@@ -63,7 +57,7 @@ function loadEnv() {
     };
 
     if (!validId(nextConfig.guildId)) {
-        throw new Error("Invalid GUILD_ID in .env");
+        throw new Error("Invalid or missing GUILD_ID environment variable.");
     }
 
     const nextBots = new Map();
@@ -71,14 +65,12 @@ function loadEnv() {
     for (const [key, value] of Object.entries(parsed)) {
         const match = key.match(/^BOT_(\d+)_TOKEN$/);
 
-        if (!match) continue;
+        if (!match || !value?.trim()) continue;
 
         const id = normalizeBotId(match[1]);
 
         const channelId =
             parsed[`BOT_${match[1]}_CHANNEL_ID`] || "";
-
-        if (!value.trim()) continue;
 
         if (!validId(channelId)) {
             log(`Bot ${id}: invalid or missing channel ID.`);
@@ -88,7 +80,7 @@ function loadEnv() {
         nextBots.set(id, {
             id,
             token: value.trim(),
-            channelId: String(channelId)
+            channelId: String(channelId).trim()
         });
     }
 
@@ -97,6 +89,7 @@ function loadEnv() {
 
     return nextBots;
 }
+
 
 /* ============================================
    BOT CONNECTION CLASS
