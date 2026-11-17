@@ -1179,20 +1179,12 @@ function handleCommand(input) {
    MAIN
 ============================================ */
 
+const http = require("http");
+
 function main() {
-    console.log("");
-
-    console.log(
-        "=========================================="
-    );
-
-    console.log(
-        "       DISCORD WEBSOCKET MANAGER"
-    );
-
-    console.log(
-        "=========================================="
-    );
+    console.log("==========================================");
+    console.log("       DISCORD WEBSOCKET MANAGER          ");
+    console.log("==========================================");
 
     try {
         loadEnv();
@@ -1202,27 +1194,23 @@ function main() {
     }
 
     log(`Guild: ${config.guildId}`);
-
     log(`Configured bots: ${botConfigs.size}`);
-
     log("No bots started automatically.");
 
-    console.log("");
-
-    const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-        prompt: "> "
+    // Local-only control server (keeps container alive & accepts CLI commands)
+    const server = http.createServer((req, res) => {
+        if (req.method === "POST") {
+            let body = "";
+            req.on("data", chunk => (body += chunk));
+            req.on("end", () => {
+                handleCommand(body.trim());
+                res.end("OK");
+            });
+        }
     });
 
-    rl.prompt();
-
-    rl.on("line", line => {
-        handleCommand(line);
-
-        if (!shuttingDown) {
-            rl.prompt();
-        }
+    server.listen(3001, "127.0.0.1", () => {
+        log("Manager running in background. Use 'node cli.js' via SSH to control.");
     });
 }
 
