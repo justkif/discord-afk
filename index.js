@@ -1206,41 +1206,33 @@ function main() {
     } catch (error) {
         log(`Configuration error: ${error.message}`);
         process.exit(1);
-        return;
     }
 
     log(`Guild: ${config.guildId}`);
+
     log(`Configured bots: ${botConfigs.size}`);
+
     log("No bots started automatically.");
 
     console.log("");
 
-    // Interactive terminal only
-    if (process.stdin.isTTY) {
-        const rl = readline.createInterface({
-            input: process.stdin,
-            output: process.stdout,
-            prompt: "> "
-        });
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+        prompt: "> "
+    });
 
-        rl.prompt();
+    rl.prompt();
 
-        rl.on("line", line => {
-            handleCommand(line);
+    rl.on("line", line => {
+        handleCommand(line);
 
-            if (!shuttingDown) {
-                rl.prompt();
-            }
-        });
+        if (!shuttingDown) {
+            rl.prompt();
+        }
+    });
 
-        rl.on("close", () => {
-            // Only close the interface.
-            // Do not shut down the manager.
-        });
-    } else {
-        log("Non-interactive environment detected.");
-        log("Manager running without terminal input.");
-    }
+    rl.on("close", shutdown);
 }
 
 /* ============================================
