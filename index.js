@@ -1224,8 +1224,6 @@ function main() {
             rl.prompt();
         }
     });
-
-    rl.on("close", shutdown);
 }
 
 /* ============================================
