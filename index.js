@@ -3,7 +3,7 @@ const dotenv = require("dotenv");
 
 const fs = require("fs");
 const path = require("path");
-const readline = require("readline");
+const net = require("net");
 const WebSocket = require("ws");
 
 /* ============================================
@@ -24,14 +24,26 @@ const bots = new Map();
 
 let shuttingDown = false;
 
+// Private control socket: accessible only from inside this Railway container.
+const CONTROL_HOST = "127.0.0.1";
+const CONTROL_PORT = Number(process.env.CONTROL_PORT || 47831);
+const controlClients = new Set();
+let controlServer = null;
+
 /* ============================================
    LOG
 ============================================ */
 
 function log(message) {
-    console.log(
-        `[${new Date().toLocaleTimeString()}] ${message}`
-    );
+    const line = `[${new Date().toLocaleTimeString()}] ${message}`;
+    console.log(line);
+
+    // Mirror manager logs to SSH-connected control clients.
+    for (const client of controlClients) {
+        if (!client.destroyed && client.writable) {
+            client.write(line + "\n");
+        }
+    }
 }
 
 function normalizeBotId(id) {
@@ -989,15 +1001,15 @@ function reloadEnv() {
    STATUS
 ============================================ */
 
-function showStatus() {
-    console.log("");
+function showStatus(output = console.log) {
+    output("");
 
-    console.log(
+    output(
         "=============== WEBSOCKET STATUS ==============="
     );
 
     if (botConfigs.size === 0) {
-        console.log("No bots configured.");
+        output("No bots configured.");
     }
 
     for (const [id, config] of botConfigs) {
@@ -1011,24 +1023,24 @@ function showStatus() {
             ? instance.channelId
             : config.channelId;
 
-        console.log(
+        output(
             `Bot ${id} | WebSocket: ${status.toUpperCase()} | Channel: ${channelId}`
         );
     }
 
-    console.log(
+    output(
         "================================================="
     );
 
-    console.log("");
+    output("");
 }
 
 /* ============================================
    HELP
 ============================================ */
 
-function showHelp() {
-    console.log(`
+function showHelp(output = console.log) {
+    output(`
 Commands:
 
   start <bot id...>
@@ -1092,6 +1104,12 @@ function shutdown() {
 
     bots.clear();
 
+    if (controlServer) {
+        controlServer.close();
+    }
+    for (const client of controlClients) client.end("Manager shutting down.\n");
+    controlClients.clear();
+
     setTimeout(() => {
         process.exit(0);
     }, 500);
@@ -1101,7 +1119,7 @@ function shutdown() {
    COMMAND HANDLER
 ============================================ */
 
-function handleCommand(input) {
+function handleCommand(input, output = log) {
     const parts = input.trim().split(/\s+/);
 
     const command = parts.shift()?.toLowerCase();
@@ -1112,7 +1130,7 @@ function handleCommand(input) {
 
         case "start": {
             if (!parts.length) {
-                log("Usage: start <bot id...>");
+                output("Usage: start <bot id...>");
                 return;
             }
 
@@ -1122,7 +1140,7 @@ function handleCommand(input) {
 
         case "end": {
             if (!parts.length) {
-                log("Usage: end <bot id...>");
+                output("Usage: end <bot id...>");
                 return;
             }
 
@@ -1134,7 +1152,7 @@ function handleCommand(input) {
             const [botId, channelId] = parts;
 
             if (!botId || !channelId) {
-                log("Usage: change <bot id> <channel id>");
+                output("Usage: change <bot id> <channel id>");
                 return;
             }
 
@@ -1144,7 +1162,7 @@ function handleCommand(input) {
 
         case "restart": {
             if (!parts.length) {
-                log("Usage: restart <bot id...>");
+                output("Usage: restart <bot id...>");
                 return;
             }
 
@@ -1157,11 +1175,11 @@ function handleCommand(input) {
             break;
 
         case "status":
-            showStatus();
+            showStatus(output);
             break;
 
         case "help":
-            showHelp();
+            showHelp(output);
             break;
 
         case "exit":
@@ -1170,8 +1188,8 @@ function handleCommand(input) {
             break;
 
         default:
-            log(`Unknown command: ${command}`);
-            log('Type "help" for commands.');
+            output(`Unknown command: ${command}`);
+            output('Type "help" for commands.');
     }
 }
 
@@ -1179,39 +1197,64 @@ function handleCommand(input) {
    MAIN
 ============================================ */
 
-const http = require("http");
+function startControlServer() {
+    controlServer = net.createServer(socket => {
+        socket.setEncoding("utf8");
+        controlClients.add(socket);
+
+        socket.write("Connected to Discord WebSocket Manager. Type help.\n");
+
+        let buffer = "";
+        socket.on("data", chunk => {
+            buffer += chunk;
+
+            let newline;
+            while ((newline = buffer.indexOf("\n")) !== -1) {
+                const line = buffer.slice(0, newline).trim();
+                buffer = buffer.slice(newline + 1);
+                if (!line) continue;
+
+                try {
+                    handleCommand(line, message => {
+                        if (!socket.destroyed) socket.write(String(message) + "\n");
+                    });
+                } catch (error) {
+                    socket.write(`Command error: ${error.message}\n`);
+                }
+            }
+        });
+
+        socket.on("close", () => controlClients.delete(socket));
+        socket.on("error", () => controlClients.delete(socket));
+    });
+
+    controlServer.on("error", error => {
+        log(`Control server error: ${error.message}`);
+        process.exit(1);
+    });
+
+    controlServer.listen(CONTROL_PORT, CONTROL_HOST, () => {
+        log(`SSH control server listening on ${CONTROL_HOST}:${CONTROL_PORT}`);
+    });
+}
 
 function main() {
+    console.log("");
     console.log("==========================================");
-    console.log("       DISCORD WEBSOCKET MANAGER          ");
+    console.log("       DISCORD WEBSOCKET MANAGER");
     console.log("==========================================");
 
     try {
         loadEnv();
     } catch (error) {
-        log(`Configuration error: ${error.message}`);
-        process.exit(1);
+        log(`Configuration warning: ${error.message}`);
     }
 
-    log(`Guild: ${config.guildId}`);
+    log(`Guild: ${config.guildId || "not configured"}`);
     log(`Configured bots: ${botConfigs.size}`);
     log("No bots started automatically.");
 
-    // Local-only control server (keeps container alive & accepts CLI commands)
-    const server = http.createServer((req, res) => {
-        if (req.method === "POST") {
-            let body = "";
-            req.on("data", chunk => (body += chunk));
-            req.on("end", () => {
-                handleCommand(body.trim());
-                res.end("OK");
-            });
-        }
-    });
-
-    server.listen(3001, "127.0.0.1", () => {
-        log("Manager running in background. Use 'node cli.js' via SSH to control.");
-    });
+    startControlServer();
 }
 
 /* ============================================

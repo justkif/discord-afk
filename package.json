@@ -1,13 +1,4 @@
 {
-  "name": "discord-manager",
-  "version": "1.0.0",
-  "private": true,
-  "engines": {
-    "node": "24.x"
-  },
-  "scripts": {
-    "start": "node index.js"
-  },
   "dependencies": {
     "dotenv": "^18.0.10",
     "ws": "^8.23.0"
