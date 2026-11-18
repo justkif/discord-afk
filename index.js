@@ -1,16 +1,9 @@
-
-const dotenv = require("dotenv");
-
-const fs = require("fs");
-const path = require("path");
 const net = require("net");
 const WebSocket = require("ws");
 
 /* ============================================
    CONFIGURATION
 ============================================ */
-
-const ENV_FILE = path.join(__dirname, ".env");
 
 const GATEWAY_URL =
     "wss://gateway.discord.gg/?v=10&encoding=json";
@@ -29,18 +22,36 @@ const CONTROL_HOST = "127.0.0.1";
 const CONTROL_PORT = Number(process.env.CONTROL_PORT || 47831);
 const controlClients = new Set();
 let controlServer = null;
+const MAX_CONTROL_BUFFER = 64 * 1024;
 
 /* ============================================
    LOG
 ============================================ */
 
-function log(message) {
+const LOG_LEVEL = process.env.LOG_LEVEL || "INFO";
+
+const LOG_LEVELS = {
+    ERROR: 0,
+    WARN: 1,
+    INFO: 2,
+    DEBUG: 3
+};
+
+function log(message, level = "INFO") {
+    if (LOG_LEVELS[level] > LOG_LEVELS[LOG_LEVEL]) {
+        return;
+    }
+
     const line = `[${new Date().toLocaleTimeString()}] ${message}`;
+
     console.log(line);
 
-    // Mirror manager logs to SSH-connected control clients.
     for (const client of controlClients) {
-        if (!client.destroyed && client.writable) {
+        if (
+            !client.destroyed &&
+            client.writable &&
+            client.writableLength < MAX_CONTROL_BUFFER
+        ) {
             client.write(line + "\n");
         }
     }
@@ -121,8 +132,10 @@ class BotConnection {
 
         this.heartbeatTimer = null;
         this.heartbeatInterval = 0;
+        this.heartbeatAcked = true;
         this.reconnectTimer = null;
         this.voiceRejoinTimer = null;
+        this.invalidSessionTimer = null;
 
         this.reconnectDelay = 1000;
 
@@ -150,37 +163,10 @@ class BotConnection {
     }
 
     /* ========================================
-       TOKEN VALIDATION
-    ======================================== */
-
-    async checkToken() {
-        const response = await fetch(
-            `${API}/users/@me`,
-            {
-                headers: {
-                    Authorization: `${this.token}`
-                }
-            }
-        );
-
-        if (!response.ok) {
-            throw new Error(
-                `Token validation failed: HTTP ${response.status}`
-            );
-        }
-
-        this.botUser = await response.json();
-
-        this.log(
-            `Authenticated as ${this.botUser.username} (${this.botUser.id})`
-        );
-    }
-
-    /* ========================================
        START
     ======================================== */
 
-    async start() {
+    start() {
         if (
             this.ws ||
             this.connecting ||
@@ -193,18 +179,12 @@ class BotConnection {
         try {
             this.setStatus("starting");
 
-            await this.checkToken();
-
-            if (this.stopping || shuttingDown) return;
-
             this.reconnectDelay = 1000;
 
             this.connectGateway();
 
         } catch (error) {
             this.log(`Start failed: ${error.message}`);
-
-
 
             this.setStatus("retrying");
 
@@ -220,6 +200,7 @@ class BotConnection {
         this.stopHeartbeat();
 
         this.heartbeatInterval = interval;
+        this.heartbeatAcked = true;
 
         const initialDelay = Math.random() * interval;
 
@@ -234,6 +215,14 @@ class BotConnection {
             this.ws.readyState !== WebSocket.OPEN
         ) {
             this.stopHeartbeat();
+            return;
+        }
+
+        // Previous heartbeat was not acknowledged.
+        if (!this.heartbeatAcked) {
+            this.log("Heartbeat ACK timeout. Terminating connection.");
+
+            this.ws.terminate();
             return;
         }
 
@@ -259,6 +248,8 @@ class BotConnection {
                     d: null
                 })
             );
+
+            this.heartbeatAcked = false;
         } catch (error) {
             this.log(
                 `Heartbeat error: ${error.message}`
@@ -397,6 +388,7 @@ class BotConnection {
 
         // HEARTBEAT ACK
         if (event.op === 11) {
+            this.heartbeatAcked = true;
             return;
         }
 
@@ -404,9 +396,14 @@ class BotConnection {
         if (event.op === 9) {
             this.log("Invalid session received.");
 
-            setTimeout(() => {
+            this.clearInvalidSessionTimer();
+
+            this.invalidSessionTimer = setTimeout(() => {
+                this.invalidSessionTimer = null;
+
                 if (
                     !this.stopping &&
+                    !shuttingDown &&
                     this.ws &&
                     this.ws.readyState === WebSocket.OPEN
                 ) {
@@ -542,6 +539,13 @@ class BotConnection {
         }
     }
 
+    clearInvalidSessionTimer() {
+        if (this.invalidSessionTimer) {
+            clearTimeout(this.invalidSessionTimer);
+            this.invalidSessionTimer = null;
+        }
+    }
+
     /* ========================================
        CONNECT GATEWAY
     ======================================== */
@@ -621,7 +625,10 @@ class BotConnection {
             this.ws = null;
             this.connecting = false;
 
+            // Clear all timers belonging to the disconnected connection.
             this.stopHeartbeat();
+            this.clearVoiceRejoinTimer();
+            this.clearInvalidSessionTimer();
 
             this.log(
                 `WebSocket closed: code=${code}, reason=${reason.toString() || "none"}`
@@ -648,7 +655,6 @@ class BotConnection {
             this.scheduleReconnect();
         });
     }
-
     /* ========================================
        RECONNECT
     ======================================== */
@@ -724,6 +730,8 @@ class BotConnection {
         this.log("Restarting WebSocket...");
 
         this.clearReconnectTimer();
+        this.clearInvalidSessionTimer();
+        this.clearVoiceRejoinTimer();
         this.stopHeartbeat();
 
         this.reconnectDelay = 1000;
@@ -762,6 +770,7 @@ class BotConnection {
         this.restartPending = false;
 
         this.clearReconnectTimer();
+        this.clearInvalidSessionTimer();
         this.clearVoiceRejoinTimer();
         this.stopHeartbeat();
 
